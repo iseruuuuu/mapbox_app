@@ -1,4 +1,8 @@
+import 'dart:async';
+import 'dart:math';
 import 'package:flutter/material.dart';
+import 'package:location/location.dart';
+import 'package:mapbox_gl/mapbox_gl.dart';
 
 void main() {
   runApp(const MyApp());
@@ -7,109 +11,144 @@ void main() {
 class MyApp extends StatelessWidget {
   const MyApp({Key? key}) : super(key: key);
 
-  // This widget is the root of your application.
   @override
   Widget build(BuildContext context) {
-    return MaterialApp(
-      title: 'Flutter Demo',
-      theme: ThemeData(
-        // This is the theme of your application.
-        //
-        // Try running your application with "flutter run". You'll see the
-        // application has a blue toolbar. Then, without quitting the app, try
-        // changing the primarySwatch below to Colors.green and then invoke
-        // "hot reload" (press "r" in the console where you ran "flutter run",
-        // or simply save your changes to "hot reload" in a Flutter IDE).
-        // Notice that the counter didn't reset back to zero; the application
-        // is not restarted.
-        primarySwatch: Colors.blue,
-      ),
-      home: const MyHomePage(title: 'Flutter Demo Home Page'),
+    return const MaterialApp(
+      title: 'Flutter Mapbox',
+      home: MapPage(),
     );
   }
 }
 
-class MyHomePage extends StatefulWidget {
-  const MyHomePage({Key? key, required this.title}) : super(key: key);
-
-  // This widget is the home page of your application. It is stateful, meaning
-  // that it has a State object (defined below) that contains fields that affect
-  // how it looks.
-
-  // This class is the configuration for the state. It holds the values (in this
-  // case the title) provided by the parent (in this case the App widget) and
-  // used by the build method of the State. Fields in a Widget subclass are
-  // always marked "final".
-
-  final String title;
+class MapPage extends StatefulWidget {
+  const MapPage({Key? key}) : super(key: key);
 
   @override
-  State<MyHomePage> createState() => _MyHomePageState();
+  _MapPageState createState() => _MapPageState();
 }
 
-class _MyHomePageState extends State<MyHomePage> {
-  int _counter = 0;
+class _MapPageState extends State<MapPage> {
+  final Completer<MapboxMapController> _controller = Completer();
+  final Location _locationService = Location();
+  // 地図スタイル用 Mapbox URL
+  final String _style = '【スタイルのURL】'; // 地図を日本語化したときなどに必要
+  // Location で緯度経度が取れなかったときのデフォルト値
+  final double _initialLat = 35.6895014;
+  final double _initialLong = 139.6917337;
+  // 現在位置
+  LocationData? _yourLocation;
+  // GPS 追従？
+  bool _gpsTracking = false;
 
-  void _incrementCounter() {
+  // 現在位置の監視状況
+  StreamSubscription? _locationChangedListen;
+
+  @override
+  void initState() {
+    super.initState();
+
+    // 現在位置の取得
+    _getLocation();
+
+    // 現在位置の変化を監視
+    _locationChangedListen =
+        _locationService.onLocationChanged.listen((LocationData result) async {
+          setState(() {
+            _yourLocation = result;
+          });
+        });
     setState(() {
-      // This call to setState tells the Flutter framework that something has
-      // changed in this State, which causes it to rerun the build method below
-      // so that the display can reflect the updated values. If we changed
-      // _counter without calling setState(), then the build method would not be
-      // called again, and so nothing would appear to happen.
-      _counter++;
+      _gpsTracking = true;
     });
   }
 
   @override
+  void dispose() {
+    super.dispose();
+
+    // 監視を終了
+    _locationChangedListen?.cancel();
+  }
+
+  @override
   Widget build(BuildContext context) {
-    // This method is rerun every time setState is called, for instance as done
-    // by the _incrementCounter method above.
-    //
-    // The Flutter framework has been optimized to make rerunning build methods
-    // fast, so that you can just rebuild anything that needs updating rather
-    // than having to individually change instances of widgets.
     return Scaffold(
-      appBar: AppBar(
-        // Here we take the value from the MyHomePage object that was created by
-        // the App.build method, and use it to set our appbar title.
-        title: Text(widget.title),
-      ),
-      body: Center(
-        // Center is a layout widget. It takes a single child and positions it
-        // in the middle of the parent.
-        child: Column(
-          // Column is also a layout widget. It takes a list of children and
-          // arranges them vertically. By default, it sizes itself to fit its
-          // children horizontally, and tries to be as tall as its parent.
-          //
-          // Invoke "debug painting" (press "p" in the console, choose the
-          // "Toggle Debug Paint" action from the Flutter Inspector in Android
-          // Studio, or the "Toggle Debug Paint" command in Visual Studio Code)
-          // to see the wireframe for each widget.
-          //
-          // Column has various properties to control how it sizes itself and
-          // how it positions its children. Here we use mainAxisAlignment to
-          // center the children vertically; the main axis here is the vertical
-          // axis because Columns are vertical (the cross axis would be
-          // horizontal).
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: <Widget>[
-            const Text(
-              'You have pushed the button this many times:',
-            ),
-            Text(
-              '$_counter',
-              style: Theme.of(context).textTheme.headline4,
-            ),
-          ],
-        ),
-      ),
-      floatingActionButton: FloatingActionButton(
-        onPressed: _incrementCounter,
-        tooltip: 'Increment',
-        child: const Icon(Icons.add),
-      ), // This trailing comma makes auto-formatting nicer for build methods.
+      body: _makeMapboxMap(),
+      floatingActionButton: _makeGpsIcon(),
     );
+  }
+
+  Widget _makeMapboxMap() {
+    if (_yourLocation == null) {
+      // 現在位置が取れるまではロード中画面を表示
+      return const Center(
+        child: CircularProgressIndicator(),
+      );
+    }
+    // GPS 追従が ON かつ地図がロードされている→地図の中心を移動
+    if (_gpsTracking) {
+      _controller.future.then((mapboxMap) {
+        mapboxMap.moveCamera(CameraUpdate.newLatLng(LatLng(
+            _yourLocation!.latitude ?? _initialLat,
+            _yourLocation!.longitude ?? _initialLong)));
+      });
+    }
+    // Mapbox ウィジェットを返す
+    return MapboxMap(
+      // 地図（スタイル）を指定（デフォルト地図の場合は省略可）
+      styleString: _style,
+      // 初期表示される位置情報を現在位置から設定
+      initialCameraPosition: CameraPosition(
+        target: LatLng(_yourLocation!.latitude ?? _initialLat,
+            _yourLocation!.longitude ?? _initialLong),
+        zoom: 13.5,
+      ),
+      onMapCreated: (MapboxMapController controller) {
+        _controller.complete(controller);
+      },
+      compassEnabled: true,
+      // 現在位置を表示する
+      myLocationEnabled: true,
+      // 地図をタップしたとき
+      onMapClick: (Point<double> point, LatLng tapPoint) {
+        _controller.future.then((mapboxMap) {
+          mapboxMap.moveCamera(CameraUpdate.newLatLng(tapPoint));
+        });
+        setState(() {
+          _gpsTracking = false;
+        });
+      },
+    );
+  }
+
+  Widget _makeGpsIcon() {
+    return FloatingActionButton(
+      backgroundColor: Colors.blue,
+      onPressed: () {
+        _gpsToggle();
+      },
+      child: Icon(
+        // GPS 追従の ON / OFF に合わせてアイコン表示する
+        _gpsTracking ? Icons.gps_fixed : Icons.gps_not_fixed,
+      ),
+    );
+  }
+
+  void _gpsToggle() {
+    setState(() {
+      _gpsTracking = !_gpsTracking;
+    });
+    // ここは iOS では不要
+    if (_gpsTracking) {
+      _controller.future.then((mapboxMap) {
+        mapboxMap.moveCamera(CameraUpdate.newLatLng(LatLng(
+            _yourLocation!.latitude ?? _initialLat,
+            _yourLocation!.longitude ?? _initialLong)));
+      });
+    }
+  }
+
+  void _getLocation() async {
+    _yourLocation = await _locationService.getLocation();
   }
 }
